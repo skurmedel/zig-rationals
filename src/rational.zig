@@ -36,6 +36,7 @@ const RationalError = error{ ZeroDenominator, SignedOverflow };
 pub fn Rational(comptime bit_count: u16) type {
     return struct {
         const Self = @This();
+        // A signed int of bit_count size.
         pub const T = SignedInt(bit_count);
 
         pub const zero = Self{ .numerator = 0, .denominator = 1 };
@@ -57,7 +58,7 @@ pub fn Rational(comptime bit_count: u16) type {
             if (n == 0)
                 return zero;
 
-            const gcd: T = gcdBinary(T, n, d);
+            const gcd: T = if (n >= -std.math.maxInt(T)) gcdBinary(T, n, d) else 1;
 
             var nr = @divTrunc(if (d < 0) -n else n, gcd);
             var dr = @divTrunc(if (d < 0) -d else d, gcd);
@@ -98,7 +99,10 @@ pub fn Rational(comptime bit_count: u16) type {
         }
 
         /// Equivalent to add, but with one rational negated.
-        pub fn sub(self: Self, other: Self) !Self {}
+        pub fn sub(self: Self, other: Self) !Self {
+            var b = try other.negate();
+            return self.add(b);
+        }
 
         /// Multiplies two rationals.
         pub fn mul(self: Self, other: Self) !Self {
@@ -180,7 +184,12 @@ pub fn Rational(comptime bit_count: u16) type {
         /// - `numerator >= -max(T)`
         ///
         /// `-min(T)` on a Two's complement machine may not fit into T.
-        pub fn negated(self: Self) !Self {}
+        pub fn negate(self: Self) !Self {
+            return if (self.numerator < -std.math.maxInt(T))
+                RationalError.SignedOverflow
+            else
+                Self{ .numerator = -self.numerator, .denominator = self.denominator };
+        }
 
         /// Computes the mediant of two Rationals, a/b and c/d as:
         /// ```
@@ -201,29 +210,32 @@ pub fn Rational(comptime bit_count: u16) type {
             return Self.new(numerator, denominator);
         }
 
+        pub const ApproximationOptions = struct {
+            /// Will not allow a denominator larger than this. Must be non-zero. Sign is ignored.
+            /// Setting this to 1 effectively forces a rational that corresponds to an integer.
+            /// Defaults to max(T) which implies the result is just the same rational.
+            largest_denominator: ?T = std.math.maxInt(T),
+        };
+
         /// Attempts to find a Rational that approximates this one.
-        ///
-        /// Takes an options struct of the following form:
-        /// ```
-        /// struct {
-        ///     /// Will not allow a denominator larger than this. Must be non-zero. Sign is ignored.
-        ///     /// Setting this to 1 effectively forces a rational that corresponds to an integer.
-        ///     /// Defaults to max(T) which implies the result is just the same rational.
-        ///     largest_denominator: ?T,
-        /// }
-        /// ```
         ///
         /// Preconditions:
         ///  - options.largest_denominator != 0
-        pub fn rationalApproximant(self: Self, options: ?RationalApproximantOptions) !Self {
-            // Lazy "proof" of algorithm:
+        pub fn approximate(self: Self, options: Self.ApproximationOptions) !Self {
             // for a/b < c/d the mediant:
             //  a/b < (a+c)/(c+d) < c/d
             //
             // set U = 0/1, V = max(T)/1
+            // compute mediant by binary search until the new denominator is larger than allowed.
+            return RationalError.SignedOverflow;
         }
     };
 }
+
+pub const R8 = Rational(8);
+pub const R16 = Rational(16);
+pub const R32 = Rational(32);
+pub const R64 = Rational(64);
 
 /// Computes the greatest common divisor d using the binary GCD algorithm.
 ///
@@ -299,6 +311,8 @@ fn gcdBinary(comptime T: type, a: T, b: T) T {
     }
 }
 
+// first_primes 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97
+
 test "gcdBinary" {
     // Common edge cases.
     testing.expectEqual(gcdBinary(SignedInt(32), 4, 0), 4);
@@ -319,11 +333,11 @@ test "gcdBinary" {
     testing.expectEqual(gcdBinary(SignedInt(32), -2 * 11, 11), 11);
     testing.expectEqual(gcdBinary(SignedInt(32), -2 * 11, -11), 11);
     testing.expectEqual(gcdBinary(SignedInt(32), -2 * 11, -2 * 11), 2 * 11);
+
+    testing.expectEqual(gcdBinary(SignedInt(32), 29 * 37 * 41, 37 * 61 * 61), 37);
 }
 
 test "Rational.new" {
-    const R32 = Rational(32);
-
     const r = try R32.new(2, 3);
     testing.expectEqual(r.numerator, 2);
     testing.expectEqual(r.denominator, 3);
@@ -372,7 +386,6 @@ test "eucliddiv" {
 }
 
 test "Rational.order" {
-    const R8 = Rational(8);
 
     // Sign is taken into account.
     var a = try R8.new(1, 2);
@@ -411,7 +424,6 @@ test "Rational.order" {
 }
 
 test "Rational.mediant" {
-    const R8 = Rational(8);
 
     // Easy cases
     var a = try R8.new(1, 2);
@@ -445,8 +457,6 @@ test "Rational.mediant" {
 }
 
 test "Rational.mul" {
-    const R32 = Rational(32);
-
     var a = try R32.new(1, 5);
     var b = try R32.new(3, 5);
     var c = try a.mul(b);
@@ -461,8 +471,6 @@ test "Rational.mul" {
 }
 
 test "Rational.add" {
-    const R32 = Rational(32);
-
     // Common denominator doesn't need cross-multiplication.
     var a = try R32.new(2, 5);
     var b = try R32.new(4, 5);
@@ -475,4 +483,40 @@ test "Rational.add" {
     c = try a.add(b);
     testing.expectEqual(c.numerator, 2 * 7 + 4 * 5);
     testing.expectEqual(c.denominator, 5 * 7);
+}
+
+test "Rational.negate" {
+    var a = try R32.new(2, 5);
+    var b = try a.negate();
+    testing.expect(b.numerator == -2);
+    testing.expect(b.denominator == 5);
+
+    // Clear cut overflow.
+    var u = try R8.new(-128, 2);
+    testing.expectError(RationalError.SignedOverflow, u.negate());
+}
+
+test "Rational.sub" {
+    // Same denominators.
+    var a = try R32.new(2, 5);
+    var b = try R32.new(3, 5);
+    var c = try a.sub(b);
+    testing.expectEqual(c.numerator, -1);
+    testing.expectEqual(c.denominator, 5);
+
+    // Different denominators
+    a = try R32.new(2, 3);
+    b = try R32.new(3, 5);
+    c = try a.sub(b);
+    testing.expectEqual(c.numerator, 1);
+    testing.expectEqual(c.denominator, 15);
+
+    // Teethering edge of overflow.
+    var u = try R8.new(-128, 1);
+    var v = try R8.new(-1, 1);
+    var w = try u.sub(v);
+    testing.expectEqual(w.numerator, -127);
+    testing.expectEqual(w.denominator, 1);
+    // Definitive overflow.
+    testing.expectError(RationalError.SignedOverflow, v.sub(u));
 }
