@@ -23,7 +23,7 @@ fn eucliddiv(comptime T: type, a: T, b: T) EuclidDiv(T) {
     return EuclidDiv(T){ .q = q, .r = r };
 }
 
-const RationalError = error{ ZeroDenominator, SignedOverflow };
+pub const RationalError = error{ ZeroDenominator, SignedOverflow };
 
 /// Represents a subset of the field of Rationals (commonly referred to as Q). A rational is a number of the form (a / b) with b != 0.
 ///
@@ -222,11 +222,7 @@ pub fn Rational(comptime bit_count: u16) type {
         /// Preconditions:
         ///  - options.largest_denominator != 0
         pub fn approximate(self: Self, options: Self.ApproximationOptions) !Self {
-            // for a/b < c/d the mediant:
-            //  a/b < (a+c)/(c+d) < c/d
-            //
-            // set U = 0/1, V = max(T)/1
-            // compute mediant by binary search until the new denominator is larger than allowed.
+            // Todo: Implement me.
             return RationalError.SignedOverflow;
         }
     };
