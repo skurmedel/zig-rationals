@@ -226,6 +226,7 @@ pub fn Rational(comptime bit_count: u16) type {
         ///
         /// Preconditions:
         ///  - options.largest_denominator != 0
+        ///  - options.largest_denominator >= -std.math.maxInt(T)
         pub fn approximate(self: Self, options: Self.ApproximationOptions) !Self {
             if (options.largest_denominator == 0)
                 return RationalError.ZeroDenominator;
