@@ -157,8 +157,8 @@ pub fn Rational(comptime bit_count: u16) type {
                     }
 
                     // "Recurse" on the remainder, using [1] above.
-                    const new_u_denom = u.r;
-                    const new_v_denom = v.r;
+                    const new_u_denom = v.r;
+                    const new_v_denom = u.r;
 
                     const new_u = u;
                     u = eucliddiv(T, v_denom, v.r);
@@ -178,7 +178,12 @@ pub fn Rational(comptime bit_count: u16) type {
         /// - `numerator >= -max(T)`
         ///
         /// `abs(min(T))` on a Two's complement machine may not fit into T.
-        pub fn abs(self: Self) !Self {}
+        pub fn abs(self: Self) !Self {
+            return if (self.numerator < 0)
+                try self.negate()
+            else
+                self;
+        }
 
         /// Preconditions:
         /// - `numerator >= -max(T)`
@@ -214,7 +219,7 @@ pub fn Rational(comptime bit_count: u16) type {
             /// Will not allow a denominator larger than this. Must be non-zero. Sign is ignored.
             /// Setting this to 1 effectively forces a rational that corresponds to an integer.
             /// Defaults to max(T) which implies the result is just the same rational.
-            largest_denominator: ?T = std.math.maxInt(T),
+            largest_denominator: T = std.math.maxInt(T),
         };
 
         /// Attempts to find a Rational that approximates this one.
@@ -222,8 +227,49 @@ pub fn Rational(comptime bit_count: u16) type {
         /// Preconditions:
         ///  - options.largest_denominator != 0
         pub fn approximate(self: Self, options: Self.ApproximationOptions) !Self {
-            // Todo: Implement me.
-            return RationalError.SignedOverflow;
+            if (options.largest_denominator == 0)
+                return RationalError.ZeroDenominator;
+            if (options.largest_denominator < -std.math.maxInt(T))
+                return RationalError.SignedOverflow;
+            const largest_denominator = absInt(options.largest_denominator) catch unreachable;
+
+            // We'll do a binary search on a Stern-Brocot tree.
+            var lower = try Self.new(0, 1);
+            var upper: ?Self = null; // null signifies 1/0 which "represents" infinity.
+            var s = try self.abs();
+
+            var med = lower;
+            while (std.math.Order.eq != Self.order(s, lower)) {
+                if (upper) |upper_val| {
+                    // standard case.
+                    med = try lower.mediant(upper_val);
+                } else {
+                    // "upper is infinity"
+                    var numerator: T = 0;
+                    if (@addWithOverflow(T, lower.numerator, 1, &numerator))
+                        return RationalError.SignedOverflow;
+
+                    med = Self{ .numerator = numerator, .denominator = lower.denominator };
+                }
+
+                if (med.denominator > largest_denominator)
+                    break;
+
+                switch (Self.order(s, med)) {
+                    std.math.Order.lt => upper = med,
+                    std.math.Order.eq => lower = med,
+                    std.math.Order.gt => lower = med,
+                }
+            }
+
+            return if (self.numerator < 0)
+                lower.negate()
+            else
+                lower;
+        }
+
+        pub fn format(value: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print("({}/{})", .{ value.numerator, value.denominator });
         }
     };
 }
@@ -417,6 +463,11 @@ test "Rational.order" {
     b = try R8.new(126, 127);
     testing.expectEqual(R8.order(a, b), std.math.Order.eq);
     testing.expectEqual(R8.order(b, a), std.math.Order.eq);
+
+    a = try R8.new(5, 8);
+    b = try R8.new(3, 5);
+    testing.expectEqual(R8.order(a, b), std.math.Order.gt);
+    testing.expectEqual(R8.order(b, a), std.math.Order.lt);
 }
 
 test "Rational.mediant" {
@@ -515,4 +566,46 @@ test "Rational.sub" {
     testing.expectEqual(w.denominator, 1);
     // Definitive overflow.
     testing.expectError(RationalError.SignedOverflow, v.sub(u));
+}
+
+test "Rational.approximate" {
+    // Trivial cases.
+    var a = try R8.new(2, 3);
+    var c = try a.approximate(.{ .largest_denominator = 3 });
+    testing.expectEqual(std.math.Order.eq, R8.order(a, c));
+
+    a = try R8.new(5, 1);
+    c = try a.approximate(.{});
+    testing.expectEqual(c.numerator, 5);
+    testing.expectEqual(c.denominator, 1);
+
+    // Easier cases.
+    // In a Stern-Brocot tree, we can see that 3/5, falls between 1/2 and 2/3, but we limit the denominator to 3,
+    // so the algorithm should terminate at 1/2 as this is closer to our lower bound.
+    a = try R8.new(3, 5);
+    c = try a.approximate(.{ .largest_denominator = 3 });
+    testing.expectEqual(c.numerator, 1);
+    testing.expectEqual(c.denominator, 2);
+    // And now when we allow it to, find an exact match.
+    c = try a.approximate(.{ .largest_denominator = 5 });
+    testing.expectEqual(c.numerator, 3);
+    testing.expectEqual(c.denominator, 5);
+
+    // 5/8 is between 3/5 and 2/3.
+    a = try R8.new(5, 8);
+    c = try a.approximate(.{ .largest_denominator = 5 });
+    testing.expectEqual(c.numerator, 3);
+    testing.expectEqual(c.denominator, 5);
+    // negative case
+    a = try R8.new(-5, 8);
+    c = try a.approximate(.{ .largest_denominator = 5 });
+    testing.expectEqual(c.numerator, -3);
+    testing.expectEqual(c.denominator, 5);
+
+    // Weird edge cases.
+    // Here we force the denominator to be at most 1. So can only get integer solutions.
+    a = try R8.new(3, 5);
+    c = try a.approximate(.{ .largest_denominator = 1 });
+    testing.expectEqual(c.numerator, 0);
+    testing.expectEqual(c.denominator, 1);
 }
