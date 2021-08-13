@@ -235,6 +235,8 @@ pub fn Rational(comptime bit_count: u16) type {
             const largest_denominator = absInt(options.largest_denominator) catch unreachable;
 
             // We'll do a binary search on a Stern-Brocot tree.
+            // For simplicity we'll continue until we are equal or we can't fulfil the constraints, in case which
+            // we return lower. It is simpler to implement than returning upper due to it's special nature.
             var lower = try Self.new(0, 1);
             var upper: ?Self = null; // null signifies 1/0 which "represents" infinity.
             var s = try self.abs();
@@ -263,12 +265,14 @@ pub fn Rational(comptime bit_count: u16) type {
                 }
             }
 
+            // Todo: We should probably select on the closest.
             return if (self.numerator < 0)
                 lower.negate()
             else
                 lower;
         }
 
+        /// Formats a rational value as "{}/{}". Format options affect the numerator.
         pub fn format(value: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
             try writer.print("({}/{})", .{ value.numerator, value.denominator });
         }
